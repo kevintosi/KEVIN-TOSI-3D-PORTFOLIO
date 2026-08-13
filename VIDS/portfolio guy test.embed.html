@@ -1,0 +1,14 @@
+<!-- Transparent video, all browsers.
+     Safari ignores alpha in WebM, so it gets the HEVC MP4 instead. -->
+<video id="vid-portfolio-guy-test" autoplay loop muted playsinline
+       style="width:100%;height:auto;background:transparent"></video>
+
+<script>
+(function () {
+  var v = document.getElementById("vid-portfolio-guy-test");
+  // Safari (incl. iOS) is the only engine that needs the HEVC file.
+  var isSafari = /^((?!chrome|android|crios|fxios|edg).)*safari/i
+                   .test(navigator.userAgent);
+  v.src = isSafari ? "portfolio%20guy%20test.mp4" : "portfolio%20guy%20test.webm";
+})();
+</script>
