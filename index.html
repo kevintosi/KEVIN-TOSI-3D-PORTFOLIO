@@ -6,10 +6,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kevin's Portfolio</title>
     <style>
+        /* Two-finger sideways swipe on a trackpad is a history gesture in Chrome and Safari,
+           and beta testers were triggering it while scrolling to navigate — one stray
+           horizontal swipe and the browser leaves the page, which ends the session. This
+           opts the document out of overscroll-driven navigation; the wheel handler below
+           closes the rest of the gap. The back BUTTON still works — only the gesture is
+           suppressed, which is the narrowest fix that solves it. */
+        html {
+            overscroll-behavior: none;
+            overscroll-behavior-x: none;
+        }
+
         body {
             margin: 0;
             padding: 0;
             overflow: hidden;
+            overscroll-behavior: none;
+            overscroll-behavior-x: none;
             font-family: sans-serif;
             /* The WebGL canvas is drawn with alpha and a clear alpha of 0, so this is the
                backdrop behind the whole scene — not just the page margins. It also shows
@@ -770,7 +783,7 @@
         // On the approach walkway (Plane.003, x -0.35..0.35, z 7.33..24.49), facing back
         // toward the vault mouth so you walk the length of it on the way in.
         // OLD: (0, 0.16 + EYE_OFFSET, -9.5) far corridor end; (1.20, 0.21 + EYE_OFFSET, 6.04) house world.
-        const SPAWN = new THREE.Vector3(0, 1 + EYE_OFFSET, 9);
+        const SPAWN = new THREE.Vector3(0, 1 + EYE_OFFSET, -15);
         // Where the camera aims on entry. Level with the eye so you start looking straight
         // ahead rather than up or down.
         const SPAWN_LOOK = new THREE.Vector3(0, 0.45, 6.5);
@@ -1621,7 +1634,7 @@
         setupBillboardVideo(
             './VIDS/webmtest.webm',
             .67, -18.03, -36,   // position
-            .6,                    // size        — plane is square; source is square too
+            .9,                    // size        — plane is square; source is square too
             14,                     // playWithin  — volume is 0 here, ramping up as you close
             14,                    // fullVolumeAt— full volume once this close
             false,                  // loop        — off: it runs through once, not on repeat
@@ -2889,7 +2902,14 @@
             pauseAllMedia();
         });
 
+        // { passive: false } matters: a passive listener cannot call preventDefault, and
+        // without preventDefault the sideways component of a trackpad swipe still reaches
+        // Chrome as a back/forward gesture even with overscroll-behavior set. Cancelling
+        // every wheel event is safe here — the page is a fixed full-screen canvas with
+        // `overflow: hidden`, so there is nothing that legitimately scrolls.
         document.addEventListener('wheel', (e) => {
+            if (e.cancelable) e.preventDefault();
+
             // Gallery carousel: same feel as the shorts menu, but driven by standing in the
             // gallery rather than by looking at a hitbox — the cards float free, so there is
             // no wall to aim at.
@@ -2913,7 +2933,7 @@
                     wheelCooldown = now;
                 }
             }
-        });
+        }, { passive: false });
 
         document.addEventListener('mousemove', () => {
             if (controls.isLocked) resetPlayerIdle();
