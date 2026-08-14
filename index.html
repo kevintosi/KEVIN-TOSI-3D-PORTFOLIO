@@ -724,7 +724,7 @@
         // On the approach walkway (Plane.003, x -0.35..0.35, z 7.33..24.49), facing back
         // toward the vault mouth so you walk the length of it on the way in.
         // OLD: (0, 0.16 + EYE_OFFSET, -9.5) far corridor end; (1.20, 0.21 + EYE_OFFSET, 6.04) house world.
-        const SPAWN = new THREE.Vector3(-.24, .6 + EYE_OFFSET, -18.6);
+        const SPAWN = new THREE.Vector3(0, 1 + EYE_OFFSET, 13);
         // Where the camera aims on entry. Level with the eye so you start looking straight
         // ahead rather than up or down.
         const SPAWN_LOOK = new THREE.Vector3(0, 0.45, 6.5);
@@ -1148,6 +1148,62 @@
             return screenData;
         }
 
+        // Put a local video onto a screen that already exists in the .glb, rather than
+        // floating a plane in front of it. The model carries a `Slavic_Tv` whose face is a
+        // mesh using the material named `tv_screen` — matching on the MATERIAL name, not the
+        // mesh name, because the exporter splits the set into `tv` / `tv_1` by material and
+        // those names carry no meaning on their own.
+        //
+        // Texturing the modelled face means the UVs, the curve of the glass and the fit
+        // inside the casing are whatever you built in Blender. Nothing here needs to know
+        // the TV's size, position or facing — move it in the model and this follows.
+        //
+        // It joins localScreens, so it inherits click-to-play, the interaction prompt, the
+        // house-lights dim and pause-on-escape without any of that being special-cased.
+        // uv — how the video texture has to be turned to match the model's own UVs.
+        //   { flipY }    false flips vertically. glTF authors UVs with a top-left origin,
+        //                which is the opposite of a video texture's default, so a screen
+        //                taken from the model usually wants this.
+        //   { rotation } radians about the middle of the texture, for UVs that are turned
+        //                rather than mirrored.
+        //
+        // The Slavic TV needs flipY false and nothing else. Worth recording how that was
+        // established, because guessing it from a photographic frame does not work: a
+        // rotation and a reflection both leave a person the right way up, and telling them
+        // apart by eye means picking out which side a shirt is lit from. Park the clip on
+        // its title card and read the words instead — mirrored text is unmistakable.
+        function attachGlbScreenVideo(root, materialName, videoSrc, uv = {}) {
+            let face = null;
+            root.traverse((o) => {
+                if (face || !o.isMesh || !o.material) return;
+                const mats = Array.isArray(o.material) ? o.material : [o.material];
+                if (mats.some(m => m && m.name === materialName)) face = o;
+            });
+            if (!face) {
+                console.warn(`[glb-screen] no mesh using material "${materialName}" — video not placed`);
+                return null;
+            }
+
+            // Its own material instance: the .glb may share `tv_screen` with something else,
+            // and a shared one would put the video on both.
+            const frontMat = new THREE.MeshBasicMaterial({ color: 0x111111, toneMapped: false });
+            if (Array.isArray(face.material)) {
+                face.material = face.material.map(m => (m && m.name === materialName) ? frontMat : m);
+            } else {
+                face.material = frontMat;
+            }
+
+            face.userData = { type: 'local_screen', videoSrc };
+            face.layers.enable(1);   // raycast/interaction layers, same as the built screens
+            face.layers.enable(2);
+
+            const screenData = { videoSrc, mesh: face, frontMat, video: null, texture: null,
+                                 playing: false, uv };
+            localScreens.push(screenData);
+            console.info(`[glb-screen] "${materialName}" wired to ${videoSrc.split('/').pop()}`);
+            return screenData;
+        }
+
         function toggleLocalScreen(screenData) {
             if (screenData.playing) {
                 if (screenData.video) screenData.video.pause();
@@ -1162,6 +1218,16 @@
                     screenData.video.playsInline = true;
                     screenData.texture = new THREE.VideoTexture(screenData.video);
                     screenData.texture.colorSpace = THREE.SRGBColorSpace;
+                    // Screens taken from the .glb carry the model's own UVs, which need not
+                    // agree with a video texture's default orientation. See attachGlbScreenVideo.
+                    const uv = screenData.uv;
+                    if (uv) {
+                        if (uv.flipY !== undefined) screenData.texture.flipY = uv.flipY;
+                        if (uv.rotation) {
+                            screenData.texture.center.set(0.5, 0.5);
+                            screenData.texture.rotation = uv.rotation;
+                        }
+                    }
                 }
                 screenData.frontMat.map = screenData.texture;
                 screenData.frontMat.color.set(0xffffff);
@@ -1175,9 +1241,9 @@
         // Optional per-screen overrides: rotY (default 0), width (default 0.28), height (default 0.21)
         // WORLD CONFIG — on the left wall, past the end of the PROJECT FI ribbon (z -13.80).
         // OLD: { x: -1.32, y: 0.4, z: 2 } in the house world.
-        const LOCAL_VIDEO_SCREENS = [
-            { src: './VIDS/MPCC/how-to-make-content.mp4', x: -0.06, y: 0.60, z: -14.30, rotY: -Math.PI / 2 },
-        ];
+        // Empty: how-to-make-content.mp4 now plays on the Slavic TV in the model instead of
+        // on a plane here. Add a line back to hang a local clip on a code-built panel.
+        const LOCAL_VIDEO_SCREENS = [];
         LOCAL_VIDEO_SCREENS.forEach(s => setupLocalVideoScreen(s.src, s.x, s.y, s.z, s.rotY, s.width, s.height));
 
         // --- BILLBOARD VIDEO ---
@@ -1365,14 +1431,14 @@
         // audible; swap the line back once scene1 is re-exported with sound.
         setupBillboardVideo(
             './VIDS/webmtest.webm',
-            1.16, -18.03, -19.17,   // position
+            .67, -18.03, -36,   // position
             .6,                    // size        — plane is square; source is square too
-            10,                     // playWithin  — volume is 0 here, ramping up as you close
-            2.5,                    // fullVolumeAt— full volume once this close
+            14,                     // playWithin  — volume is 0 here, ramping up as you close
+            14,                    // fullVolumeAt— full volume once this close
             false,                  // loop        — off: it runs through once, not on repeat
             true,                   // playOnce    — and then never again this session
             null,                   // startWithin — unused; startBox governs the trigger
-            10                       // startBox    — holds off until EVERY axis is within 5 of
+            14                       // startBox    — holds off until EVERY axis is within 5 of
                                     //   the panel at (1.16, -18, -19.17): a 10-unit cube, not
                                     //   a radius. The far corner of that cube is 8.66 away, so
                                     //   the playWithin 10 volume ramp is already under way the
@@ -2428,7 +2494,12 @@
             }
 
             else if (data.type === 'local_screen') {
-                const screen = localScreens.find(s => s.videoSrc === data.videoSrc);
+                // Matched on the MESH, not on videoSrc. Two screens can legitimately show the
+                // same file — the Slavic TV plays the same clip as the panel down the hall —
+                // and a videoSrc lookup returns whichever was registered first, so clicking
+                // one toggled the other one across the map.
+                const screen = localScreens.find(s => s.mesh === hit.object)
+                            || localScreens.find(s => s.videoSrc === data.videoSrc);
                 if (screen) toggleLocalScreen(screen);
             }
 
@@ -2986,6 +3057,8 @@
             });
             scene.add(model);
             hideGlbGalleryPhotos(model);
+            // The Slavic TV lives in the model, so this can only run once the model is here.
+            attachGlbScreenVideo(model, 'tv_screen', './VIDS/MPCC/how-to-make-content.mp4', { flipY: false });
             model.updateMatrixWorld(true);
 
             // --- SLIDING DOOR SETUP ---
@@ -3471,7 +3544,7 @@
                 // Radius around each door's centre that opens it, from any direction.
                 // The two doors are 1.48 apart, so anything under ~0.74 keeps them fully
                 // independent; above that they start opening as a pair.
-                const TRIGGER_DIST = 1.2;
+                const TRIGGER_DIST = .6;
                 const OPEN_SPEED = 3.0;
                 for (const door of doors) {
                     const dist = playerCapsule.start.distanceTo(door.triggerPos);
