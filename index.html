@@ -42,6 +42,27 @@
             transition: opacity 0.3s ease;
         }
 
+        #screen-prompt {
+            position: absolute;
+            top: 56px;
+            left: 50%;
+            transform: translateX(-50%);
+            max-width: 80vw;
+            text-align: center;
+            white-space: pre-line;      /* the menu prompt is two lines */
+            color: #ffffff;
+            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+            font-weight: 600;
+            font-size: 17px;
+            letter-spacing: 2.5px;
+            text-shadow: 0 2px 12px rgba(0, 0, 0, 0.9);
+            pointer-events: none;
+            user-select: none;
+            z-index: 210;
+            opacity: 0;
+            transition: opacity 0.55s ease-out;
+        }
+
         #hud {
             position: absolute;
             top: 10px;
@@ -193,10 +214,14 @@
     </div>
 
 
-    <div id="hud">
-        <div id="pos-status" style="color: #aaa;">{ x: 0.00, y: 0.00, z: 0.00 }</div>
-        <div id="interaction-prompt" style="color: #00ffff; font-weight: bold; margin-top: 10px; min-height: 1.2em;"></div>
-    </div>
+    <!-- Standing hint, always on. The coordinate readout that used to live here was a
+         development aid; nothing reads it any more. -->
+    <div id="hud">PRESS ESC TO PAUSE</div>
+
+    <!-- Interaction prompts. Centred at the top rather than tucked in the HUD corner, and
+         faded out once read — see setPrompt(). Kept out of #hud deliberately: that box is
+         the coordinate readout and is styled as a panel, which is not what a prompt wants. -->
+    <div id="screen-prompt"></div>
 
     <div id="instructions">
         <canvas id="blob-bg" style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;"></canvas>
@@ -745,7 +770,7 @@
         // On the approach walkway (Plane.003, x -0.35..0.35, z 7.33..24.49), facing back
         // toward the vault mouth so you walk the length of it on the way in.
         // OLD: (0, 0.16 + EYE_OFFSET, -9.5) far corridor end; (1.20, 0.21 + EYE_OFFSET, 6.04) house world.
-        const SPAWN = new THREE.Vector3(0, 1 + EYE_OFFSET, 13);
+        const SPAWN = new THREE.Vector3(0, 1 + EYE_OFFSET, 9);
         // Where the camera aims on entry. Level with the eye so you start looking straight
         // ahead rather than up or down.
         const SPAWN_LOOK = new THREE.Vector3(0, 0.45, 6.5);
@@ -818,6 +843,21 @@
         // --- STANDALONE YOUTUBE SCREENS ---
         const ytScreens = [];
 
+        // A screen that is playing has to be DRAWN BEFORE anything it needs to hide.
+        //
+        // The hole punch is `colorWrite = false`: it writes depth but no colour. Depth stops
+        // whatever comes AFTER it, and does nothing about what came before — a colourless
+        // pass cannot erase pixels already in the buffer. Every screen sat at renderOrder -1,
+        // and within one renderOrder three.js sorts by shader program and material before
+        // distance, so a screen two rooms away could paint first and then survive inside the
+        // hole. That is what made the playing screen look see-through: the strip of pictures
+        // in it was the CARS.COM row, 2.2m behind the wall.
+        //
+        // Dropping the playing one to -1000 puts it first in the opaque list unconditionally,
+        // since renderOrder is compared before anything else.
+        const SCREEN_ORDER = -1;
+        const HOLE_PUNCH_ORDER = -1000;
+
         function setupYouTubeScreen(videoId, x, y, z, rotY = 0, width = 0.75, height = 0.42) {
             // Thick box — front face shows thumbnail, switches to hole-punch when playing
             const blackMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 1 });
@@ -831,7 +871,7 @@
             const screenMesh = new THREE.Mesh(screenGeo, [blackMat, blackMat, blackMat, blackMat, frontMat, blackMat]);
             screenMesh.position.set(x, y, z);
             screenMesh.rotation.y = rotY;
-            screenMesh.renderOrder = -1;
+            screenMesh.renderOrder = SCREEN_ORDER;
             screenMesh.userData = { type: 'yt_screen', videoId: videoId };
             screenMesh.layers.enable(1);
             screenMesh.layers.enable(2);
@@ -878,6 +918,88 @@
             return screenData;
         }
 
+        // The same hole-punch + CSS3D pairing as setupYouTubeScreen, but adopting a face
+        // that already exists in the .glb instead of building a box for it. Used for the
+        // classic laptop: the model has the screen, the bezel and the tilt already, and a
+        // generated panel floated in front would fight all three.
+        //
+        // A YouTube film cannot be a VideoTexture the way the Slavic TV's local clip is —
+        // it is a cross-origin iframe and its pixels are unreadable — so this has to punch
+        // a hole rather than paint the mesh.
+        //
+        // Everything downstream (click to play, the prompt, one-embed-at-a-time, the
+        // exclusivity rule) works off the ytScreens record, so it needs no special cases.
+        // World-space centre of a mesh's geometry, which is not the same thing as its
+        // origin once a model nests parts inside shared parents.
+        const _bbc = new THREE.Vector3();
+        function bbCentreWorld(mesh, out) {
+            if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+            mesh.geometry.boundingBox.getCenter(_bbc);
+            return out.copy(_bbc).applyMatrix4(mesh.matrixWorld);
+        }
+
+        function attachGlbYouTubeScreen(root, materialName, videoId) {
+            let face = null;
+            root.traverse((o) => {
+                if (face || !o.isMesh || !o.material) return;
+                const mats = Array.isArray(o.material) ? o.material : [o.material];
+                if (mats.some(m => m && m.name === materialName)) face = o;
+            });
+            if (!face) {
+                console.warn(`[glb-yt] no mesh using material "${materialName}" — ${videoId} not placed`);
+                return null;
+            }
+
+            const thumbTex = textureLoader.load(`https://img.youtube.com/vi/${videoId}/mqdefault.jpg`);
+            thumbTex.colorSpace = THREE.SRGBColorSpace;
+            const frontMat = new THREE.MeshBasicMaterial({ map: thumbTex, toneMapped: false });
+            if (Array.isArray(face.material)) {
+                face.material = face.material.map(m => (m && m.name === materialName) ? frontMat : m);
+            } else {
+                face.material = frontMat;
+            }
+
+            face.userData = { type: 'yt_screen', videoId };
+            face.layers.enable(1);
+            face.layers.enable(2);
+            face.renderOrder = SCREEN_ORDER;
+
+            // World size and orientation come off the mesh, so moving or resizing the laptop
+            // in Blender moves the iframe with it.
+            if (!face.geometry.boundingBox) face.geometry.computeBoundingBox();
+            const bb = face.geometry.boundingBox;
+            const scale = face.getWorldScale(new THREE.Vector3());
+            const worldW = (bb.max.x - bb.min.x) * scale.x;
+            const worldH = (bb.max.y - bb.min.y) * scale.y;
+
+            const CSS_W = 640;
+            const container = document.createElement('div');
+            container.style.width = CSS_W + 'px';
+            container.style.height = Math.round(CSS_W * (worldH / worldW)) + 'px';
+            container.style.backgroundColor = '#000';
+            container.style.pointerEvents = 'none';
+
+            const cssObj = new CSS3DObject(container);
+            // The GEOMETRY's centre, not the object's origin. getWorldPosition returns the
+            // origin, and in this model the laptop's screen quad shares an origin with the
+            // lid it belongs to while its geometry sits offset from it — so aligning on the
+            // origin dropped the iframe below the hole and left the top of the screen see
+            // through. Everything else about the placement was already right.
+            face.getWorldQuaternion(cssObj.quaternion);
+            bbCentreWorld(face, cssObj.position);
+            const cssScale = worldW / CSS_W;
+            cssObj.scale.set(cssScale, cssScale, cssScale);
+            cssObj.translateZ(0.002);      // just clear of the face, along its own normal
+            cssObj.visible = false;
+            scene.add(cssObj);
+
+            const screenData = { videoId, mesh: face, frontMat, thumbTex, cssObj, container,
+                                 playing: false, paused: false, player: null };
+            ytScreens.push(screenData);
+            console.info(`[glb-yt] "${materialName}" wired to ${videoId}`);
+            return screenData;
+        }
+
         // Tear an embed down and put the thumbnail back. Each live iframe is a full
         // YouTube player, so only one screen in the world may hold one at a time.
         function stopYtScreen(screenData) {
@@ -891,6 +1013,7 @@
             screenData.frontMat.map = screenData.thumbTex;
             screenData.frontMat.color.set(0xffffff);
             screenData.frontMat.colorWrite = true;
+            screenData.mesh.renderOrder = SCREEN_ORDER;
             screenData.frontMat.needsUpdate = true;
             screenData.playing = false;
             screenData.paused = false;
@@ -916,6 +1039,7 @@
                 screenData.frontMat.map = null;
                 screenData.frontMat.color = new THREE.Color(0x000000);
                 screenData.frontMat.colorWrite = false;
+                screenData.mesh.renderOrder = HOLE_PUNCH_ORDER;
                 screenData.frontMat.needsUpdate = true;
 
                 const origin = encodeURIComponent(window.location.origin);
@@ -978,7 +1102,7 @@
             const screenMesh = new THREE.Mesh(screenGeo, [blackMat, blackMat, blackMat, blackMat, frontMat, blackMat]);
             screenMesh.position.set(x, y, z);
             screenMesh.rotation.y = rotY;
-            screenMesh.renderOrder = -1;
+            screenMesh.renderOrder = SCREEN_ORDER;
             screenMesh.userData = { type: 'vimeo_screen', videoId };
             screenMesh.layers.enable(1);
             screenMesh.layers.enable(2);
@@ -1069,6 +1193,7 @@
             screenData.frontMat.map = screenData.thumbTex || null;
             screenData.frontMat.color.set(screenData.thumbTex ? 0xffffff : 0x111111);
             screenData.frontMat.colorWrite = true;
+            screenData.mesh.renderOrder = SCREEN_ORDER;
             screenData.frontMat.needsUpdate = true;
             screenData.playing = false;
             screenData.paused = false;
@@ -1090,6 +1215,7 @@
                 screenData.frontMat.map = null;
                 screenData.frontMat.color = new THREE.Color(0x000000);
                 screenData.frontMat.colorWrite = false;
+                screenData.mesh.renderOrder = HOLE_PUNCH_ORDER;
                 screenData.frontMat.needsUpdate = true;
 
                 const sep = screenData.embedUrl.includes('?') ? '&' : '?';
@@ -1193,7 +1319,7 @@
         // rotation and a reflection both leave a person the right way up, and telling them
         // apart by eye means picking out which side a shirt is lit from. Park the clip on
         // its title card and read the words instead — mirrored text is unmistakable.
-        function attachGlbScreenVideo(root, materialName, videoSrc, uv = {}) {
+        function attachGlbScreenVideo(root, materialName, videoSrc, uv = {}, loop = true) {
             let face = null;
             root.traverse((o) => {
                 if (face || !o.isMesh || !o.material) return;
@@ -1218,8 +1344,17 @@
             face.layers.enable(1);   // raycast/interaction layers, same as the built screens
             face.layers.enable(2);
 
+            // The model's screen is whatever shape it is — the Slavic TV's face is 1.22:1
+            // against a 16:9 source — and a video texture stretched across it comes out
+            // squashed. Measure the face here and let toggleLocalScreen crop the source to
+            // match, so nothing has to be hardcoded per screen.
+            if (!face.geometry.boundingBox) face.geometry.computeBoundingBox();
+            const fb = face.geometry.boundingBox;
+            const faceAspect = (fb.max.x - fb.min.x) / (fb.max.y - fb.min.y);
+
             const screenData = { videoSrc, mesh: face, frontMat, video: null, texture: null,
-                                 playing: false, uv };
+                                 playing: false, uv, loop,
+                                 fitAspect: uv.fit !== undefined ? uv.fit : faceAspect };
             localScreens.push(screenData);
             console.info(`[glb-screen] "${materialName}" wired to ${videoSrc.split('/').pop()}`);
             return screenData;
@@ -1235,7 +1370,14 @@
                     screenData.video = document.createElement('video');
                     screenData.video.src = screenData.videoSrc;
                     screenData.video.crossOrigin = 'anonymous';
-                    screenData.video.loop = true;
+                    // loop defaults on, but a screen can opt out — the Slavic TV plays its
+                    // clip through once and then waits to be clicked again.
+                    screenData.video.loop = screenData.loop !== false;
+                    if (screenData.loop === false) {
+                        // Without this `playing` stays true at the end, so the next click
+                        // reads as PAUSE and it takes two to start it over.
+                        screenData.video.addEventListener('ended', () => { screenData.playing = false; });
+                    }
                     screenData.video.playsInline = true;
                     screenData.texture = new THREE.VideoTexture(screenData.video);
                     screenData.texture.colorSpace = THREE.SRGBColorSpace;
@@ -1249,10 +1391,36 @@
                             screenData.texture.rotation = uv.rotation;
                         }
                     }
+
+                    // Crop the source to the screen's shape instead of stretching it to fit,
+                    // the same choice the code-built CRT panels make. Waits for metadata
+                    // because videoWidth/videoHeight are 0 until then, which would otherwise
+                    // compute a crop of NaN and blank the screen.
+                    if (screenData.fitAspect) {
+                        const tex = screenData.texture, v = screenData.video;
+                        const fit = () => {
+                            if (!v.videoWidth || !v.videoHeight) return;
+                            const srcAspect = v.videoWidth / v.videoHeight;
+                            const target = screenData.fitAspect;
+                            if (srcAspect > target) {          // source too wide: trim the sides
+                                const k = target / srcAspect;
+                                tex.repeat.x = k; tex.offset.x = (1 - k) / 2;
+                            } else if (srcAspect < target) {   // too tall: trim top and bottom
+                                const k = srcAspect / target;
+                                tex.repeat.y = k; tex.offset.y = (1 - k) / 2;
+                            }
+                            tex.needsUpdate = true;
+                        };
+                        if (v.readyState >= 1) fit();
+                        else v.addEventListener('loadedmetadata', fit, { once: true });
+                    }
                 }
                 screenData.frontMat.map = screenData.texture;
                 screenData.frontMat.color.set(0xffffff);
                 screenData.frontMat.needsUpdate = true;
+                // Parked on its last frame after a non-looping run; play() from there would
+                // end instantly, so rewind first.
+                if (screenData.video.ended) screenData.video.currentTime = 0;
                 screenData.video.play().catch(e => console.warn('Local video play error:', e));
                 screenData.playing = true;
             }
@@ -1574,23 +1742,27 @@
             // Treehouse keeping the order they were already in.
             { name: 'ADOBE ACROBAT',
               videos: ['zme7UI8U6_4','WzzODSYkyL8','kGpgEqGMxU4','jfeFDxnNhts','bZHDIRr0ulg'] },
-            // Google Fi and Google Maps share the one GOOGLE room. Right to left: Bad
-            // Coverage, Kitty Cat Cafe, Four Bills, then the two :06 intent spots. Maps
-            // takes the back wall on its own.
+            // Google Fi and Google Maps share the one GOOGLE room, all six on the one side
+            // wall. Right to left: Bad Coverage, Kitty Cat Cafe, Four Bills, the two :06
+            // intent spots, then Maps on the far left of the run. Six across takes them all
+            // to 0.69 rather than 0.87 — the row shares one width, so Maps joining it
+            // narrows the Fi films too.
             //
             // Dropped here: both Insta Story Superzoom cuts (Zd7F3GVF5qw, GWHyEabX0yQ),
             // and lviuiGR9e1U — which was a second upload of the same Four Bills film
             // already present as wIN_QRE5owA, so the room was showing it twice.
             { name: 'GOOGLE',
-              videos: ['Evgvf93C_C8','VEjsCn-9JoE','wIN_QRE5owA','8N_Hejf90BE','Ixr6Ag8qAfY'],
-              back:   ['adNqySKpQZk'] },
+              videos: ['adNqySKpQZk','Evgvf93C_C8','VEjsCn-9JoE','wIN_QRE5owA','8N_Hejf90BE','Ixr6Ag8qAfY'] },
             // Laid out by hand below — the film floats in the middle of the room facing the
             // door, with the campaign stills around it, so it takes no wall row here.
             { name: 'THE CROWN',  videos: [] },
             // Reversed: BEST CAR now leads on the right, VALENTINE_1 at the far end.
             { name: 'CARS.COM',
               videos: ['TKQgJSZ5Abg','RCyUYoQiwr4','LoFHGI31uHg','CobBwgeXcLE','Avfs6Y55daM'] },
-            { name: 'SAMSUNG',    videos: ['xQNUtrxiZBs','gk9VACPUg6g'] },
+            // One film, so it takes the back wall head-on at the full 1.45. The reaction
+            // piece (gk9VACPUg6g) is not here — it plays on the classic laptop in the room,
+            // wired up after the model loads.
+            { name: 'SAMSUNG',    videos: ['xQNUtrxiZBs'] },
             { name: 'SEES CANDY',
               videos: ['R6Whs70aXLg','9pyFfV3xsUs','HHTIkseopcM','LGrCeKWlqC4','U26ZECF1NHM'] },
         ];
@@ -1623,21 +1795,24 @@
             const sideSpan = ROOM_X_FROM - ROOM_X_TO;   // 5.05 along the long walls
             const backSpan = (zMax - zMin) - 0.34;      // 1.90 across the back wall
 
-            // An explicit `back` list is sized off the back wall alone instead of sharing
-            // the room's width, so one piece hung there reads as the room's centrepiece
-            // rather than another screen in the set — 1.45 against the 0.87 the GOOGLE side
-            // wall gets at five across. It also switches off the automatic overflow below.
+            // An explicit `back` list hangs on the far wall facing the door and switches off
+            // the automatic overflow below. It is laid out AFTER the side row, because it
+            // takes the side row's width — one room should read as one set, and Google Maps
+            // at 1.45 next to Fi films at 0.87 read as a different piece of work rather than
+            // the same campaign continued.
             const hasBack = !!(room.back && room.back.length);
-            if (hasBack) {
-                const bw = sizeFor(room.back.length, backSpan);
+            const layoutBackRow = (w) => {
+                if (!hasBack) return;
+                // Never wider than the back wall can take, whatever the side row is doing.
+                const bw = Math.min(w, sizeFor(room.back.length, backSpan));
                 layoutRow(room.back, {
                     axis: 'z', fixed: ROOM_BACK_X + 0.03, rotY: Math.PI / 2,
                     from: zMin + 0.17, to: zMax - 0.17,
                     width: bw, y: Math.max(ROOM_EYE + 0.05, (bw * 9 / 16) / 2 + 0.06),
                 });
-            }
+            };
 
-            if (!vids.length) return;
+            if (!vids.length) { layoutBackRow(sizeFor(1, backSpan)); return; }
 
             if (vids.length === 1 && !hasBack) {
                 // A single piece goes on the back wall, head-on as you walk in. On a side
@@ -1667,7 +1842,12 @@
             // 1.45 they'd otherwise get. The back wall takes the overflow, capped at 2 — it
             // is only 1.90 wide against the side's 5.05, so a long run there shrinks the
             // whole room.
-            const backCount = hasBack ? 0 : Math.min(2, Math.max(0, vids.length - 5));
+            // Six fit on the side wall, not five. UNITED MILEAGE PLUS has exactly six and
+            // was spilling its last film onto the back wall, which read as an odd one out;
+            // six across makes them 0.69 wide instead of 0.87, which is the trade. No other
+            // room has more than five, so this changes nothing else.
+            const ROOM_SIDE_MAX = 6;
+            const backCount = hasBack ? 0 : Math.min(2, Math.max(0, vids.length - ROOM_SIDE_MAX));
             const a = vids.slice(0, vids.length - backCount);
             const c = backCount ? vids.slice(vids.length - backCount) : [];
 
@@ -1676,6 +1856,8 @@
             let w = sizeFor(a.length, sideSpan);
             if (c.length) w = Math.min(w, sizeFor(c.length, backSpan));
             const y = Math.max(ROOM_EYE + 0.05, (w * 9 / 16) / 2 + 0.06);
+
+            layoutBackRow(w);
 
             // Near side wall, at zMin, facing +z into the room.
             layoutRow(a, { axis: 'x', fixed: zMin + 0.03, rotY: 0,
@@ -1712,22 +1894,37 @@
         }
 
         // --- THE CROWN ---
-        // The case-study film hangs in the middle of the room rather than on a wall, turned
-        // to face the door (rotY PI/2 -> normal +x) so it meets you as you walk in, with the
-        // campaign stills ringed around it.
+        // Film on the wall at the same height as every other project screen, with the stills
+        // gridded in equal blocks either side of it.
         //
-        // The ring is an ellipse, not a circle, because the room is far wider than it is
-        // tall in usable terms: 2.24m of z to play with against a floor at 0.01 and an eye
-        // line at 0.41. Those numbers set everything below — the film is 1.10 wide rather
-        // than the 1.45 a back wall would give it, so that a ring clearing its top and
-        // bottom edges still has its lowest picture above the floor.
+        // Three measurements drive this and none of them are free choices:
+        //   * the room's title, Text010, has its BOTTOM EDGE at y 0.91
+        //   * the floor is at 0.01
+        //   * the title sits 0.15m BEHIND the wall face the work hangs on, so anything here
+        //     is the nearer of the two and projects higher than its own top edge. Sizing to
+        //     the title's raw height is not enough — a still topping out at 0.89 still cuts
+        //     across it on screen. 0.80 is the working ceiling.
+        //
+        // That leaves 0.79 of height, which is what caps the stills at 0.38 wide in two rows.
+        // Bigger than that and the second row will not fit under the title.
         const CROWN_FILM = 'pLk95Bs0QZs';
-        const CROWN_AT = { x: -4.41, y: 0.58, z: -10.12 };   // room centre, from ROOM_Z
-        const CROWN_FACE_DOOR = Math.PI / 2;
-        const CROWN_FILM_W = 1.10;
-        const CROWN_RING_RZ = 0.92;   // horizontal radius; room half-depth is 1.12
-        const CROWN_RING_RY = 0.45;   // vertical radius; clears the film and stays off the floor
-        const CROWN_IMG_W = 0.28;
+        const CROWN_CEILING_Y = 0.80;      // clears the title once projection is accounted for
+        const CROWN_FLOOR_Y = 0.01;
+        const CROWN_AT_X = -4.40;          // from the title
+        const CROWN_AT_Z = -11.21;         // wall face, the offset the side-wall rows use
+        const CROWN_FACE = 0;              // +z, like every other project screen
+
+        // Same width and the same eye-level formula the other rooms use, so it hangs at the
+        // identical height to the screens in GOOGLE, ADOBE and the rest.
+        const CROWN_FILM_W = 0.87;
+        const CROWN_FILM_H = CROWN_FILM_W * 9 / 16;
+        const CROWN_FILM_Y = Math.max(ROOM_EYE + 0.05, CROWN_FILM_H / 2 + 0.06);
+
+        const CROWN_IMG_W = 0.38;          // was 0.24 — the old row read as a strip of stamps
+        const CROWN_IMG_GAP_X = 0.08;
+        const CROWN_IMG_GAP_Y = 0.05;
+        const CROWN_TOP_COLS = 4;          // 4 over 3 per side: 7 each, 14 in all
+        const CROWN_BOT_COLS = 3;
         const CROWN_DIR = './IMAGES/crown/';
         const CROWN_STILLS = [
             'Cannes-image.webp', 'biscuits.webp', 'cabbage-2.webp', 'coaster.webp',
@@ -1736,45 +1933,42 @@
             'taxi-2.webp', 'zoo.webp',
         ];
 
-        setupYouTubeScreen(CROWN_FILM, CROWN_AT.x, CROWN_AT.y, CROWN_AT.z,
-                           CROWN_FACE_DOOR, CROWN_FILM_W, CROWN_FILM_W * 9 / 16);
+        setupYouTubeScreen(CROWN_FILM, CROWN_AT_X, CROWN_FILM_Y, CROWN_AT_Z,
+                           CROWN_FACE, CROWN_FILM_W, CROWN_FILM_H);
 
-        // Spaced by ARC LENGTH, not by angle. Equal angles on an ellipse this flat (0.92
-        // against 0.45) bunch four or five pictures on top of each other at each end of the
-        // long axis while the top and bottom run sparse — stepping along the perimeter
-        // instead puts a constant gap between neighbours the whole way round. At 14 stills
-        // the perimeter is ~4.43, so each gets 0.317 of it against its own 0.28 width.
-        function ellipsePointsByArc(rz, ry, count, startAngle) {
-            const STEPS = 720, xs = [], cum = [0];
-            for (let i = 0; i <= STEPS; i++) {
-                const t = startAngle + (i / STEPS) * Math.PI * 2;
-                xs.push(t);
-                if (i > 0) {
-                    const p = xs[i - 1], q = xs[i];
-                    cum.push(cum[i - 1] + Math.hypot(rz * (Math.cos(q) - Math.cos(p)),
-                                                     ry * (Math.sin(q) - Math.sin(p))));
+        (() => {
+            // The squarest still (the Cannes badge, near 1:1) sets the row height — sizing on
+            // the average would let that one break the ceiling.
+            const rowH = CROWN_IMG_W / 1.04;
+            const blockH = rowH * 2 + CROWN_IMG_GAP_Y;
+            const midY = (CROWN_FLOOR_Y + CROWN_CEILING_Y) / 2;
+            const topY = midY + (rowH + CROWN_IMG_GAP_Y) / 2;
+            const botY = midY - (rowH + CROWN_IMG_GAP_Y) / 2;
+
+            // Each side gets the gap between the film's edge and the end of the screen run.
+            const filmL = CROWN_AT_X - CROWN_FILM_W / 2;
+            const filmR = CROWN_AT_X + CROWN_FILM_W / 2;
+            const sides = [
+                { from: ROOM_X_TO,   to: filmL },   // -7.00 .. film's left edge
+                { from: filmR,       to: ROOM_X_FROM },
+            ];
+
+            const step = CROWN_IMG_W + CROWN_IMG_GAP_X;
+            let n = 0;
+            for (const side of sides) {
+                const centre = (side.from + side.to) / 2;
+                for (const [cols, y] of [[CROWN_TOP_COLS, topY], [CROWN_BOT_COLS, botY]]) {
+                    // Rows are centred on the same axis, so the 3 sits centred under the 4.
+                    const first = centre - ((cols - 1) * step) / 2;
+                    for (let c = 0; c < cols; c++) {
+                        const file = CROWN_STILLS[n++];
+                        if (!file) return;
+                        setupWallImage(CROWN_DIR + file, first + c * step, y, CROWN_AT_Z,
+                                       CROWN_FACE, CROWN_IMG_W);
+                    }
                 }
             }
-            const total = cum[STEPS], out = [];
-            let k = 0;
-            for (let n = 0; n < count; n++) {
-                const want = (n / count) * total;
-                while (k < STEPS && cum[k + 1] < want) k++;
-                out.push(xs[k]);
-            }
-            return out;
-        }
-
-        // Starts at the top and goes round, so it reads as deliberate rather than as a list
-        // bent into a circle.
-        ellipsePointsByArc(CROWN_RING_RZ, CROWN_RING_RY, CROWN_STILLS.length, Math.PI / 2)
-            .forEach((theta, i) => {
-                setupWallImage(CROWN_DIR + CROWN_STILLS[i],
-                               CROWN_AT.x,
-                               CROWN_AT.y + CROWN_RING_RY * Math.sin(theta),
-                               CROWN_AT.z + CROWN_RING_RZ * Math.cos(theta),
-                               CROWN_FACE_DOOR, CROWN_IMG_W);
-            });
+        })();
 
 
         // Google Maps ('adNqySKpQZk') now hangs on the GOOGLE room's back wall — see the
@@ -2545,7 +2739,7 @@
         // and can trigger within a few frames of each other, and a shared element would cut
         // the first one off to restart for the second. Built lazily on first use so a door
         // that never opens costs nothing.
-        const DOOR_SFX = './audio/door opening.mp3';
+        const DOOR_SFX = './audio/door opening2.mp3';
         const DOOR_SFX_VOLUME = 0.55;
 
         function playDoorSound(door) {
@@ -2573,8 +2767,35 @@
         const controls = new PointerLockControls(camera, renderer.domElement);
         const startBtn = document.getElementById('start-button');
         const instructions = document.getElementById('instructions');
-        const interactionPrompt = document.getElementById('interaction-prompt');
-        const posStatus = document.getElementById('pos-status');
+        // --- Interaction prompts -------------------------------------------------------
+        // One line at the top of the screen that shows itself when it has something NEW to
+        // say and then gets out of the way.
+        //
+        // The timer restarts only when the WORDING changes, never on a repeat. The old HUD
+        // prompt was rewritten every frame from the raycast, so keying the fade on "was it
+        // set this frame" would have held it on screen permanently for as long as you looked
+        // at anything.
+        const interactionPrompt = document.getElementById('screen-prompt');
+        const PROMPT_HOLD_MS = 5000;
+        let promptText = null, promptShownAt = 0;
+
+        function setPrompt(text) {
+            const clean = (text || '').replace(/^> ?/gm, '').trim();   // the "> " was HUD styling
+            if (clean === promptText) return;
+            promptText = clean;
+            if (!interactionPrompt) return;
+            interactionPrompt.textContent = clean;
+            interactionPrompt.style.opacity = clean ? '1' : '0';
+            promptShownAt = clean ? performance.now() : 0;
+        }
+
+        function updatePromptFade() {
+            if (!interactionPrompt || !promptShownAt) return;
+            if (performance.now() - promptShownAt > PROMPT_HOLD_MS) {
+                interactionPrompt.style.opacity = '0';
+                promptShownAt = 0;          // faded; leave it until the wording changes
+            }
+        }
         const keyStates = {};
 
         document.addEventListener('keydown', (e) => {
@@ -2660,7 +2881,7 @@
 
         controls.addEventListener('unlock', () => {
             document.getElementById('crosshair').style.display = 'none';
-            if (interactionPrompt) interactionPrompt.innerText = "";
+            setPrompt("");
             // Esc always comes back to the welcome screen, including mid-film, and the world
             // goes quiet behind it.
             instructions.style.display = 'flex';
@@ -3055,7 +3276,10 @@
         const startBtnEl = document.getElementById('start-button');
 
         function setWorldReady() {
-            if (loadStatus) loadStatus.textContent = 'CLICK HERE TO START';
+            // The label goes away rather than repeating the call to action — that lives in
+            // the welcome art. visibility rather than display so the bar doesn't jump up by
+            // the height of the line at the moment it becomes clickable.
+            if (loadStatus) loadStatus.style.visibility = 'hidden';
             if (loadBarFill) loadBarFill.style.width = '100%';
             if (startBtnEl) { startBtnEl.style.cursor = 'pointer'; startBtnEl.style.opacity = '1'; }
         }
@@ -3126,7 +3350,11 @@
             scene.add(model);
             hideGlbGalleryPhotos(model);
             // The Slavic TV lives in the model, so this can only run once the model is here.
-            attachGlbScreenVideo(model, 'tv_screen', './VIDS/MPCC/how-to-make-content.mp4', { flipY: false });
+            // loop false — plays through once, then a click starts it again.
+            attachGlbScreenVideo(model, 'tv_screen', './VIDS/MPCC/how-to-make-content.mp4',
+                                 { flipY: false }, false);
+            // The reaction film plays on the classic laptop in the SAMSUNG room.
+            attachGlbYouTubeScreen(model, 'classic_laptop_screen', 'gk9VACPUg6g');
             model.updateMatrixWorld(true);
 
             // --- SLIDING DOOR SETUP ---
@@ -3375,7 +3603,7 @@
         }, reportLoadProgress, (error) => {
             console.error(error);
             if (loadStatus) loadStatus.textContent = 'COULD NOT LOAD THE WORLD — TRY RELOADING';
-            document.getElementById('interaction-prompt').innerText = 'ERROR LOADING MODEL: ' + error.message;
+            setPrompt('ERROR LOADING MODEL: ' + error.message);
         });
 
         // --- Fetch from both APIs then setup theater ---
@@ -3515,7 +3743,7 @@
 
                     if (playerOnGround && keyStates['Space'] && !spaceHandled) {
                         if (keyStates['ShiftLeft'] || keyStates['ShiftRight']) {
-                            playerVelocity.y = (superJumpCount % 3 === 2) ? 100.0 : 12.0;
+                            playerVelocity.y = (superJumpCount % 3 === 2) ? 200.0 : 12.0;
                             playSuperJumpSound();
                         } else {
                             playerVelocity.y = 2.0;
@@ -3637,6 +3865,7 @@
             // volume is already correct the moment control resumes.
             if (isModelLoaded) updateTheaterProximity();
             updateEmbedExclusivity();
+            updatePromptFade();
 
             if (isPlayerActive()) {
                 raycaster.setFromCamera(centerPoint, camera);
@@ -3645,6 +3874,7 @@
                 let isHoveringPlayerUI = false;
                 isHoveringMenu = false;
 
+                let prompt = "";
                 if (intersects.length > 0) {
                     const target = intersects[0].object;
                     const type = target.userData.type;
@@ -3652,38 +3882,41 @@
                     const maxDist = interactRange(type);
 
                     if (dist > maxDist) {
-                        interactionPrompt.innerText = "";
+                        prompt = "";
                     } else if (type === 'back_menu') {
                         isHoveringPlayerUI = true;
-                        interactionPrompt.innerText = target.userData.label || "";
+                        prompt = target.userData.label || "";
                     } else if (type === 'video_surface') {
-                        interactionPrompt.innerText = isVideoPaused ? "> CLICK TO PLAY" : "> CLICK TO PAUSE";
+                        prompt = isVideoPaused ? "CLICK TO PLAY" : "CLICK TO PAUSE";
                     } else if (type === 'yt_screen') {
                         const scr = ytScreens.find(s => s.videoId === target.userData.videoId);
-                        if (scr && scr.playing && !scr.paused) interactionPrompt.innerText = "> CLICK TO PAUSE";
-                        else if (scr && scr.paused) interactionPrompt.innerText = "> CLICK TO RESUME";
-                        else interactionPrompt.innerText = "> CLICK TO PLAY";
+                        if (scr && scr.playing && !scr.paused) prompt = "CLICK TO PAUSE";
+                        else if (scr && scr.paused) prompt = "CLICK TO RESUME";
+                        else prompt = "CLICK TO PLAY";
                     } else if (type === 'local_screen') {
-                        const scr = localScreens.find(s => s.videoSrc === target.userData.videoSrc);
-                        interactionPrompt.innerText = scr && scr.playing ? "> CLICK TO PAUSE" : "> CLICK TO PLAY";
+                        // Matched on the mesh — two screens can share a videoSrc.
+                        const scr = localScreens.find(s => s.mesh === target)
+                                 || localScreens.find(s => s.videoSrc === target.userData.videoSrc);
+                        prompt = (scr && scr.playing) ? "CLICK TO PAUSE" : "CLICK TO PLAY";
                     } else if (type === 'vimeo_screen') {
                         const scr = vimeoScreens.find(s => s.videoId === target.userData.videoId);
                         const label = scr && scr.title ? `: ${scr.title}` : '';
-                        if (scr && scr.playing && !scr.paused) interactionPrompt.innerText = "> CLICK TO PAUSE";
-                        else if (scr && scr.paused) interactionPrompt.innerText = "> CLICK TO RESUME";
-                        else interactionPrompt.innerText = `> CLICK TO PLAY${label}`;
+                        if (scr && scr.playing && !scr.paused) prompt = "CLICK TO PAUSE";
+                        else if (scr && scr.paused) prompt = "CLICK TO RESUME";
+                        else prompt = `CLICK TO PLAY${label}`;
                     } else if (type === 'menu_hitbox' || type === 'select_film') {
                         isHoveringMenu = true;
-                        const activeFilm = filmLibrary[currentFilmIndex];
-                        if (activeFilm) {
-                            interactionPrompt.innerText = `> SCROLL TO BROWSE\n> CLICK TO WATCH: ${activeFilm.title}`;
-                        }
-                    } else {
-                        interactionPrompt.innerText = "";
+                        prompt = "SCROLL UP AND DOWN TO NAVIGATE\nCLICK TO WATCH";
                     }
-                } else {
-                    interactionPrompt.innerText = "";
                 }
+
+                // Nothing under the crosshair: the gallery still has something to say, since
+                // the carousel gives no other clue that it scrolls. Only when there is no
+                // other prompt, so looking at something never gets overridden.
+                if (!prompt && playerInGallery()) {
+                    prompt = "SCROLL UP AND DOWN TO FLIP THROUGH";
+                }
+                setPrompt(prompt);
 
                 const shouldShowUI = playbackGroup.visible && isVideoPaused;
                 const targetAlpha = shouldShowUI ? 1.0 : 0.0;
@@ -3735,7 +3968,6 @@
                 });
             }
 
-            posStatus.innerText = `{ x: ${camera.position.x.toFixed(2)}, y: ${camera.position.y.toFixed(2)}, z: ${camera.position.z.toFixed(2)} }`;
 
             // House lights: derived from whether anything is actually playing, so every
             // screen type dims the room without having to remember to do it itself, and
