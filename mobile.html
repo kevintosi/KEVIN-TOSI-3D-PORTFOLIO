@@ -995,6 +995,24 @@
         const SCREEN_ORDER = -1;
         const HOLE_PUNCH_ORDER = -1000;
 
+        // The iframe is sized to match the hole in the canvas exactly, which leaves no room
+        // for the two to disagree by even a pixel - and on a phone they evidently do, clipping
+        // the edge of the picture. Measuring found nothing: the iframe tracks the hole to
+        // within 0.3px at every angle and off-centre position at a device pixel ratio of 3,
+        // the panels are 16:9 to within 0.08%, and there is far more depth precision than the
+        // frame behind would need to bleed through. Whatever causes it is something this
+        // machine cannot reproduce.
+        //
+        // So make the fit tolerant rather than exact. Insetting the iframe slightly costs
+        // nothing visible - the page behind the canvas is black and the panel's own
+        // background is black, so that margin reads as black either way - and the picture can
+        // no longer be caught by the edge of its own aperture. Touch only; the desktop has
+        // never shown this and does not need the margin.
+        const TOUCH_DEVICE = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i
+                                 .test(navigator.userAgent)
+                             || ('ontouchstart' in window && window.innerWidth < 1024);
+        const CSS_HOLE_INSET = TOUCH_DEVICE ? 0.96 : 1.0;
+
         // Poster images for the wall screens, held back until the model has loaded so they
         // do not compete with it for bandwidth and memory on a phone.
         const PENDING_THUMBS = [];
@@ -1062,7 +1080,7 @@
             const cssObj = new CSS3DObject(container);
             cssObj.position.copy(screenMesh.position);
             cssObj.rotation.copy(screenMesh.rotation);
-            const cssScale = width / CSS_W;
+            const cssScale = (width / CSS_W) * CSS_HOLE_INSET;
             cssObj.scale.set(cssScale, cssScale, cssScale);
             cssObj.translateZ(depth / 2 + 0.005);
             cssObj.visible = false;
@@ -1147,7 +1165,7 @@
             // through. Everything else about the placement was already right.
             face.getWorldQuaternion(cssObj.quaternion);
             bbCentreWorld(face, cssObj.position);
-            const cssScale = worldW / CSS_W;
+            const cssScale = (worldW / CSS_W) * CSS_HOLE_INSET;
             cssObj.scale.set(cssScale, cssScale, cssScale);
             cssObj.translateZ(0.002);      // just clear of the face, along its own normal
             cssObj.visible = false;
@@ -1340,7 +1358,7 @@
             const cssObj = new CSS3DObject(container);
             cssObj.position.copy(screenMesh.position);
             cssObj.rotation.copy(screenMesh.rotation);
-            const cssScale = width / CSS_W;
+            const cssScale = (width / CSS_W) * CSS_HOLE_INSET;
             cssObj.scale.set(cssScale, cssScale, cssScale);
             cssObj.translateZ(depth / 2 + 0.005);
             cssObj.visible = false;
