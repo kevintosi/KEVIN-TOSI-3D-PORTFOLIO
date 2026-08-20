@@ -572,8 +572,15 @@
         cssRenderer.domElement.style.position = 'absolute';
         cssRenderer.domElement.style.top = '0';
         cssRenderer.domElement.style.left = '0';
-        cssRenderer.domElement.style.width = '100%';
-        cssRenderer.domElement.style.height = '100%';
+        // NOT width/height 100%. setSize() has just sized this layer in pixels and, more to
+        // the point, told CSS3DRenderer that is how big it is - it places the camera element
+        // at half those numbers. Overriding with 100% re-sizes the box against the layout
+        // viewport while leaving the renderer's idea of the centre where it was, and CSS puts
+        // the perspective vanishing point at the centre of the REAL box. Where the layout
+        // viewport and innerWidth disagree, as they can on Chrome for iOS, those two centres
+        // part company and the whole 3D layer slides sideways - which is the video sitting
+        // left of the hole it should fill, in Chrome but not Safari. Leave the pixel size
+        // setSize() applied; applyViewportSize keeps it matched to the canvas from here on.
         cssRenderer.domElement.style.zIndex = '0';
         cssRenderer.domElement.style.pointerEvents = 'none';
         document.body.appendChild(cssRenderer.domElement);
@@ -4733,6 +4740,31 @@
 
         animate();
 
+
+        // ?diag=1 — the numbers that decide whether the 3D layer and the canvas agree. If a
+        // browser ever puts the video off to one side again, this says which value disagrees
+        // instead of leaving it to guesswork: innerWidth against the layout viewport is the
+        // pair that matters, since the two layers are sized from the first and laid out in
+        // the second.
+        if (new URLSearchParams(location.search).has('diag')) {
+            const d = document.createElement('div');
+            d.style.cssText = 'position:absolute;top:0;left:0;z-index:9999;background:rgba(0,0,0,0.8);'
+                + 'color:#0ff;font:11px/1.45 monospace;padding:8px;white-space:pre;pointer-events:none';
+            document.body.appendChild(d);
+            const layer = cssRenderer.domElement;
+            setInterval(() => {
+                const c = renderer.domElement.getBoundingClientRect();
+                const l = layer.getBoundingClientRect();
+                const vv = window.visualViewport;
+                d.textContent =
+                    `inner      ${innerWidth} x ${innerHeight}\n` +
+                    `layout vp  ${document.documentElement.clientWidth} x ${document.documentElement.clientHeight}\n` +
+                    (vv ? `visual vp  ${Math.round(vv.width)} x ${Math.round(vv.height)}  scale ${vv.scale.toFixed(2)}  off ${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)}\n` : '') +
+                    `canvas     ${Math.round(c.width)} x ${Math.round(c.height)} @ ${Math.round(c.left)},${Math.round(c.top)}\n` +
+                    `css3d      ${Math.round(l.width)} x ${Math.round(l.height)} @ ${Math.round(l.left)},${Math.round(l.top)}\n` +
+                    `dpr ${devicePixelRatio}  pixelRatio ${renderer.getPixelRatio()}  aspect ${camera.aspect.toFixed(4)}`;
+            }, 500);
+        }
 
         // Dev helper — visit with ?debug=1 to inspect/position content from the console.
         // __world.tp(x, z) teleports the player; __world.look(x, y, z) aims the camera.
