@@ -4762,8 +4762,38 @@
                     (vv ? `visual vp  ${Math.round(vv.width)} x ${Math.round(vv.height)}  scale ${vv.scale.toFixed(2)}  off ${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)}\n` : '') +
                     `canvas     ${Math.round(c.width)} x ${Math.round(c.height)} @ ${Math.round(c.left)},${Math.round(c.top)}\n` +
                     `css3d      ${Math.round(l.width)} x ${Math.round(l.height)} @ ${Math.round(l.left)},${Math.round(l.top)}\n` +
-                    `dpr ${devicePixelRatio}  pixelRatio ${renderer.getPixelRatio()}  aspect ${camera.aspect.toFixed(4)}`;
+                    `dpr ${devicePixelRatio}  pixelRatio ${renderer.getPixelRatio()}  aspect ${camera.aspect.toFixed(4)}` +
+                    screenDiag();
             }, 500);
+        }
+
+        // For ?diag=1: where the hole in the canvas is versus where the iframe actually
+        // landed, for whichever screen is playing. Every measurement made on a desktop says
+        // these agree to a fraction of a pixel, and a phone says otherwise - so let the phone
+        // do the measuring. It also separates two faults that need opposite fixes: BOX being
+        // off means the iframe is in the wrong place, while BOX matching with the picture
+        // still looking shifted means the iframe is right and YouTube is drawing itself
+        // wrongly inside it, which is a scale problem, not a placement one.
+        const _dgA = new THREE.Vector3();
+        function screenDiag() {
+            const s = ytScreens.find(x => x.playing && x.cssObj && x.cssObj.element);
+            if (!s) return '\nplay a work screen for hole vs iframe';
+            s.mesh.geometry.computeBoundingBox();
+            const g = s.mesh.geometry.boundingBox;
+            let l = 1e9, r = -1e9, t = 1e9, b = -1e9;
+            for (const [x, y] of [[g.min.x, g.min.y], [g.max.x, g.min.y], [g.min.x, g.max.y], [g.max.x, g.max.y]]) {
+                _dgA.set(x, y, g.max.z);
+                s.mesh.localToWorld(_dgA);
+                _dgA.project(camera);
+                const px = (_dgA.x * 0.5 + 0.5) * window.innerWidth;
+                const py = (-_dgA.y * 0.5 + 0.5) * window.innerHeight;
+                l = Math.min(l, px); r = Math.max(r, px); t = Math.min(t, py); b = Math.max(b, py);
+            }
+            const e = s.cssObj.element.getBoundingClientRect();
+            const R = (v) => Math.round(v);
+            return `\nhole  ${R(l)},${R(t)}  ${R(r - l)}x${R(b - t)}` +
+                   `\nbox   ${R(e.left)},${R(e.top)}  ${R(e.width)}x${R(e.height)}` +
+                   `\ndelta ${R(e.left - l)},${R(e.top - t)}  size ${R(e.width - (r - l))},${R(e.height - (b - t))}`;
         }
 
         // Dev helper — visit with ?debug=1 to inspect/position content from the console.
