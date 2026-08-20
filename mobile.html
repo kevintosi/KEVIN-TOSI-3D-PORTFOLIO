@@ -580,12 +580,15 @@
 
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        // Chrome on iOS is WebKit underneath but gets a tighter per-tab memory budget than
-        // Safari, and it was the browser that died on load before the octree was cut down.
-        // Framebuffer cost scales with the SQUARE of this, so 1.5 -> 1.0 gives back a little
-        // over half of every render target: the main buffer, the composer's, and the mask.
-        const IOS_CHROME = /CriOS/i.test(navigator.userAgent);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, IOS_CHROME ? 1.0 : 1.5));
+        // One ratio for every browser. Chrome on iOS briefly ran at 1.0 to save framebuffer
+        // memory, on the theory that its tighter per-tab budget was what killed it on load -
+        // but the thing that actually killed it was the octree, which went from 1798MB to
+        // 246MB, and Chrome has been loading fine since. What the cap did do was render the
+        // canvas at a third of the display's resolution on a 3x screen, so the hole punched
+        // for a video had a coarse, soft edge quantised to whole CSS pixels while the iframe
+        // behind it composited crisply at native scale. That is why the work screens looked
+        // off in Chrome and right in Safari: same code, half the edge precision.
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
         renderer.setClearColor(0x000000, 0);
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFShadowMap;
