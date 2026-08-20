@@ -4,6 +4,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Phones and tablets get the build made for them. This is deliberately the FIRST thing
+         in the document: everything below it eventually pulls an 84MB model that a phone
+         cannot hold, and the whole point is that the handoff happens before any of that
+         starts. It is a static host, so there is no server to do this by user agent - it has
+         to be the page's own first act.
+
+         replace(), not assign(), so Back does not drop the visitor straight back here and
+         bounce them again. ?desktop=1 opts out and is also what stops any loop: mobile.html
+         carries no redirect of its own, so there is nothing to ping-pong with.
+
+         The test matches the one the app itself uses, so the page you are handed and the
+         controls you get can never disagree. -->
+    <script>
+        (function () {
+            if (new URLSearchParams(location.search).has('desktop')) return;
+            var ua = navigator.userAgent;
+            var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua)
+                        || ('ontouchstart' in window && window.innerWidth < 1024);
+            if (isMobile) location.replace('mobile.html' + location.search);
+        })();
+    </script>
+
     <title>Kevin's Portfolio</title>
     <style>
         /* Two-finger sideways swipe on a trackpad is a history gesture in Chrome and Safari,
