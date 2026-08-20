@@ -1078,7 +1078,17 @@
             // shows the page's <body> gradient rather than black. These screens are all
             // built 16:9 today so it never bit, but it's the same defect that put coloured
             // bars across the theater screen.
-            const CSS_W = 640;
+            // 640 CSS pixels squeezed into a 0.7-unit panel is a transform scale of about
+            // 0.001, and iOS handles composited layers scaled that far down badly - the
+            // laptop screen at 0.0003 lost its video layer entirely while still playing
+            // audio, and these sit in the same territory. The thumbnail on the panel is
+            // WebGL and always looked right; only the iframe, which is composited by the
+            // browser, comes out displaced. 192 makes the transform 3x less extreme while
+            // still oversampling: 192 CSS px at a device ratio of 3 is 576 device pixels
+            // across a panel that occupies a few hundred.
+            // Touch only - the desktop build keeps 640, where screens are viewed close up
+            // and nothing has ever been out of place.
+            const CSS_W = TOUCH_DEVICE ? 192 : 640;
             const CSS_H = Math.round(CSS_W * (height / width));
             const container = document.createElement('div');
             container.style.width = CSS_W + 'px';
