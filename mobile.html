@@ -3078,13 +3078,53 @@
         }
 
         // --- 5.5. AUDIO ---
-        const fart5 = new Audio('./ui/Fart 5.mp3');
-        const fart6 = new Audio('./ui/Fart 6.mp3');
-        fart5.preload = 'auto';
-        fart6.preload = 'auto';
+        // Two copies of each sound. One shared element meant a second jump rewound the first
+        // one mid-play to start over, and rewinding an element whose play() has not resolved
+        // yet aborts it outright - so the second jump could silence the first and produce
+        // nothing itself. With a pair, a quick double only ever reaches for the idle one.
+        const FART_VOICES = [
+            [new Audio('./ui/Fart 5.mp3'), new Audio('./ui/Fart 5.mp3')],
+            [new Audio('./ui/Fart 6.mp3'), new Audio('./ui/Fart 6.mp3')]
+        ];
+        const SFX = FART_VOICES.flat();
+        for (const a of SFX) a.preload = 'auto';
         let superJumpCount = 0;
 
-        function initAudio() {}
+        // Unlock the effects. This has to run from a real tap or click, and it used to be an
+        // empty function - which is why a fart would not sound until you had been playing a
+        // while. iOS only lets an element play on its own once it has played inside a
+        // gesture, and these fire from the physics loop when you jump, never from the tap
+        // itself, so the early ones were simply refused. Same volume-0 play/pause the video
+        // clips are given, and for the same reason.
+        let sfxUnlocked = false;
+        function initAudio() {
+            if (sfxUnlocked) return;
+            sfxUnlocked = true;
+            const unlock = (a) => {
+                const vol = a.volume;
+                a.volume = 0;
+                const pr = a.play();
+                a.pause();
+                a.currentTime = 0;
+                if (pr && pr.then) {
+                    pr.then(() => { a.pause(); a.currentTime = 0; a.volume = vol; })
+                      .catch(() => { a.volume = vol; });
+                } else {
+                    a.volume = vol;
+                }
+            };
+            for (const a of SFX) unlock(a);
+            // Doors sound on proximity, which is not a gesture either, so they need the same
+            // treatment. They are built lazily on first use; build them now instead.
+            for (const d of doors) {
+                if (!d.sfx) {
+                    d.sfx = new Audio(DOOR_SFX);
+                    d.sfx.preload = 'auto';
+                    d.sfx.volume = DOOR_SFX_VOLUME;
+                }
+                unlock(d.sfx);
+            }
+        }
 
         // Doors. One Audio element per door rather than one shared: the two are 1.48 apart
         // and can trigger within a few frames of each other, and a shared element would cut
@@ -3104,7 +3144,9 @@
         }
 
         function playSuperJumpSound() {
-            const snd = (superJumpCount % 3 < 2) ? fart5 : fart6;
+            const voices = (superJumpCount % 3 < 2) ? FART_VOICES[0] : FART_VOICES[1];
+            // Take one that is not busy; only rewind if both are still going.
+            const snd = voices.find(a => a.paused || a.ended) || voices[0];
             snd.currentTime = 0;
             snd.play().catch(e => {});
             superJumpCount++;
