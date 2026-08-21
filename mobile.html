@@ -1021,7 +1021,13 @@
         const TOUCH_DEVICE = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i
                                  .test(navigator.userAgent)
                              || ('ontouchstart' in window && window.innerWidth < 1024);
-        const CSS_HOLE_INSET = TOUCH_DEVICE ? 0.96 : 1.0;
+        // Chrome gets an exact fit, Safari keeps the margin. The inset was added for Safari,
+        // which was clipping the edge of the picture when the two matched exactly; Chrome's
+        // fault is a different one and there is no evidence the margin helps it. Matching
+        // them there shows whether the margin is doing anything for Chrome at all - and if
+        // Chrome comes out right, it is worth asking whether Safari still needs it either.
+        const IOS_CHROME = /CriOS/i.test(navigator.userAgent);
+        const CSS_HOLE_INSET = (TOUCH_DEVICE && !IOS_CHROME) ? 0.96 : 1.0;
 
         // Poster images for the wall screens, held back until the model has loaded so they
         // do not compete with it for bandwidth and memory on a phone.
