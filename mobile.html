@@ -1026,6 +1026,13 @@
         // fault is a different one and there is no evidence the margin helps it. Matching
         // them there shows whether the margin is doing anything for Chrome at all - and if
         // Chrome comes out right, it is worth asking whether Safari still needs it either.
+        // ?nudge=0.05 and so on, for finding the offset by eye without a deploy per guess.
+        // Applies on every browser so Chrome and Safari can be compared at the same value.
+        const EMBED_NUDGE = (() => {
+            const v = parseFloat(new URLSearchParams(location.search).get('nudge'));
+            return Number.isFinite(v) ? v : 0;
+        })();
+
         const IOS_CHROME = /CriOS/i.test(navigator.userAgent);
         const CSS_HOLE_INSET = (TOUCH_DEVICE && !IOS_CHROME) ? 0.96 : 1.0;
 
@@ -1111,11 +1118,11 @@
             const cssObj = new CSS3DObject(container);
             cssObj.position.copy(screenMesh.position);
             cssObj.rotation.copy(screenMesh.rotation);
-            // TEMPORARY, Chrome only: a deliberately huge shove along the panel's own right
-            // axis, to see which way it goes and by how much. One unit is roughly a whole
-            // panel width, so the video should leave its frame completely - that is the
-            // point of the test. Set to 0, or delete, once the direction is known.
-            if (IOS_CHROME) cssObj.translateX(1);
+            // Nudge the embed along the panel's own right axis, from ?nudge= on the URL.
+            // Positive is right as you face the panel, in world units - these panels are
+            // 0.69 to 1.39 wide, so 0.05 is a few percent of one. Defaults to 0, so the
+            // site behaves normally for everyone and this only exists while being tuned.
+            if (EMBED_NUDGE) cssObj.translateX(EMBED_NUDGE);
             const cssScale = (width / CSS_W) * CSS_HOLE_INSET;
             cssObj.scale.set(cssScale, cssScale, cssScale);
             cssObj.translateZ(depth / 2 + 0.005);
