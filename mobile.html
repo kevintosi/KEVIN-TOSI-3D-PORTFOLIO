@@ -1078,14 +1078,22 @@
             // shows the page's <body> gradient rather than black. These screens are all
             // built 16:9 today so it never bit, but it's the same defect that put coloured
             // bars across the theater screen.
-            // 640, not less. Shrinking this to 192 on touch was an attempt at the Chrome
-            // displacement and made it worse, because the fault is not the transform: the
-            // device reported hole 352x206 against box 341x199 at delta 5,3 - the iframe
-            // centred in its hole to the pixel, the 4% difference being the inset below.
-            // Placement is exact. What is wrong is inside the iframe, where YouTube draws
-            // its video into part of the element and leaves the rest black, so giving it a
-            // smaller element only gave it less room to be wrong in.
-            const CSS_W = 640;
+            // 1280, to match the theater's embed - the one place on this site where a
+            // YouTube video plays correctly in Chrome for iOS.
+            //
+            // Placement was never the problem. The device reported hole 352x206 against box
+            // 341x199 at delta 5,3: the iframe centred in its hole to the pixel, the 4%
+            // difference being the deliberate inset. What goes wrong is inside the element,
+            // where YouTube draws its video into part of it and leaves the rest black.
+            //
+            // Comparing the two that differ: the theater's element is 1280px at a transform
+            // scale of 0.0196, the work screens were 640px at 0.001 to 0.002, and the laptop
+            // - which lost its video layer altogether - was 640px at 0.00027. Bigger element
+            // and gentler scale both track with working. Shrinking these to 192 went the
+            // wrong way on the first and made it visibly worse, which is the evidence that
+            // element size is the one that counts. The scale cannot be matched without
+            // making the panels physically larger, but the element size can.
+            const CSS_W = 1280;
             const CSS_H = Math.round(CSS_W * (height / width));
             const container = document.createElement('div');
             container.style.width = CSS_W + 'px';
