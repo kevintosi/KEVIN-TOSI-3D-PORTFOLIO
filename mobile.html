@@ -1111,6 +1111,11 @@
             const cssObj = new CSS3DObject(container);
             cssObj.position.copy(screenMesh.position);
             cssObj.rotation.copy(screenMesh.rotation);
+            // TEMPORARY, Chrome only: a deliberately huge shove along the panel's own right
+            // axis, to see which way it goes and by how much. One unit is roughly a whole
+            // panel width, so the video should leave its frame completely - that is the
+            // point of the test. Set to 0, or delete, once the direction is known.
+            if (IOS_CHROME) cssObj.translateX(1);
             const cssScale = (width / CSS_W) * CSS_HOLE_INSET;
             cssObj.scale.set(cssScale, cssScale, cssScale);
             cssObj.translateZ(depth / 2 + 0.005);
